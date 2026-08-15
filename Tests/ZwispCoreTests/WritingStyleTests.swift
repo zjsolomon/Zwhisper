@@ -87,4 +87,21 @@ struct WritingStyleTests {
         // Separated from the base by exactly one blank line.
         #expect(rendered == base + "\n\n" + (WritingStyle.casual.promptBlock ?? ""))
     }
+
+    @Test func dictionaryEntriesRenderTheirMishearings() {
+        let base = Configuration.Cleanup.defaultSystemPrompt
+        let rendered = Configuration.Cleanup.systemPrompt(
+            base: base,
+            dictionary: ["zwisp", DictionaryEntry(word: "Ziedo", soundsLike: ["Zeddo", "Zeedo"])])
+        #expect(rendered.contains("zwisp, Ziedo (often misheard as \"Zeddo\", \"Zeedo\")"))
+    }
+
+    @Test func aliasFreeDictionaryRendersBareWords() {
+        // No "(often misheard as …)" noise unless the user registered one.
+        let base = Configuration.Cleanup.defaultSystemPrompt
+        let rendered = Configuration.Cleanup.systemPrompt(
+            base: base, dictionary: ["Ziedo", "WhisperKit"])
+        #expect(rendered.contains("spellings: Ziedo, WhisperKit."))
+        #expect(!rendered.contains("misheard as"))
+    }
 }

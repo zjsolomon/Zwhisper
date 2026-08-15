@@ -54,8 +54,11 @@ WhisperKit/CoreML. **Keep this split when adding code.**
   `TextInjector.swift`, `TranscriptFormatter.swift`, `WaveLevelMeter.swift` (deterministic
   dictation-wave math), `OverlayStore.swift` (overlay on/off preference), `StatsStore.swift`
   (local dictation stats — day + lifetime aggregates, counts/durations ONLY, never
-  transcript text), `MainNav.swift` (the main window's `MainSection` list + the
-  setup-attention gate), `Logger.swift`.
+  transcript text), `CorrectionStore.swift` (the correction corpus from "Fix Last
+  Dictation…" — this one DOES store transcript text, but only pairs the user explicitly
+  saved), `CorrectionDiff.swift` (word-level LCS diff of a correction + the alias
+  suggestions it maps onto the dictionary), `MainNav.swift` (the main window's
+  `MainSection` list + the setup-attention gate), `Logger.swift`.
 - **`Sources/zwisp/`** — the executable: system-framework + WhisperKit glue on top of the
   core. Not unit-tested. Files: `main.swift`, `AppDelegate.swift` (wires everything, owns the
   status item; `@MainActor`), `HotkeyMonitor.swift` (global `CGEventTap`),
@@ -193,10 +196,39 @@ layer should stay a thin glue layer.
   rules: sharp cells, instant steps, opacity-only animation, Reduce Motion fallbacks). Opened
   from the menu-bar "Open zwisp…" (⌘,) or by re-launching the app
   (`applicationShouldHandleReopen`). **The menu bar is deliberately tiny** (cleanup toggle,
-  quick dictionary add, Launch at Login, Quit) — `menuWillOpen` re-syncs the two stateful
-  items; the old three-submenu rebuild machinery is gone. The engine has no user-facing
-  "start" action: the supervisor owns its lifecycle, and a dead engine just reads
-  green/unavailable until it's back.
+  quick dictionary add, "Fix Last Dictation…", Launch at Login, Quit) — `menuWillOpen`
+  re-syncs the stateful items (`autoenablesItems` is off: Fix Last Dictation stays disabled
+  until a dictation has typed); the old three-submenu rebuild machinery is gone. The engine
+  has no user-facing "start" action: the supervisor owns its lifecycle, and a dead engine
+  just reads green/unavailable until it's back.
+- **Correction capture** ("Fix Last Dictation…"): `AppDelegate` keeps the last successfully
+  injected dictation **in memory only** (`lastDictation`, set beside the stats seam in
+  `finishJob`); the menu item opens an editable alert, and saving stores the
+  (raw, injected, corrected) triple via `CorrectionStore` (core, tested) to
+  `~/Library/Application Support/zwisp/corrections.json`, capped at
+  `Configuration.Corrections.maxStored`. **Nothing is captured passively** — a pair exists
+  only because the user explicitly saved it; that's the privacy line. After a save,
+  `CorrectionDiff.aliasSuggestions` (core, tested — LCS word diff, substitutions only,
+  pre-filtered to what `addAlias` will accept) drives one confirm-alert per suggested
+  mishearing; an accepted one lands in the dictionary and re-fires `rewarmCleanup()`. The
+  corpus doubles as the future eval set (roadmap bet #2).
+- **Passive edit learning** (Wispr-style): after an injection, `InjectionWatcher` (app
+  layer) grabs the focused element via AX, waits for the synthetic keystrokes to land
+  (baseline on the first poll tick that contains the injected text), then polls `AXValue`
+  (~2 s cadence, 60 s window, `Configuration.EditLearning`) for the user fixing a word
+  in place. Anchoring/diff/decisions are core + tested (`EditLearning.editedText` re-anchors
+  the injected span by surrounding context; `EditLearning.actions` turns substitutions into
+  `.addMishearing` — via the same `CorrectionDiff` rails — or `.addWord` when the
+  replacement is off-dictionary AND not ordinary vocabulary per the injected `isKnownWord`
+  check, which the app supplies as `NSSpellChecker`). A detected fix raises `LearnToast`:
+  a bottom-center countdown pill (LED drain bar, 5 s) with an explicit **Cancel** button
+  (user's spec: "Cancel", not an X — cancelling means *don't add*, not dismiss). The panel
+  accepts clicks but refuses key/main — it must never steal focus, same law as the wave.
+  Commit adds the word/mishearing + `rewarmCleanup()`. All AX failures degrade silently
+  (some apps never expose `AXValue` — Electron/web views are patchy); the watched field
+  text lives in memory only, never persisted. Toggle: "Learn from your edits" in the
+  Dictionary section (`EditLearningStore`, absent → on); the watcher checks it per
+  dictation, no `Actions` closure needed.
 - **Home dashboard**: `HomeModel` (stats + hotkey names), `HomeWaveView` (the big equalizer —
   its own `WaveLevelMeter` on the larger `Configuration.homeWave` grid, driven by a
   `TimelineView` reading `AudioRecorder.currentLevel()`; suspended automatically when not on

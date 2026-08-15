@@ -115,6 +115,63 @@ struct TranscriptCorrectorTests {
         #expect(result.corrections.isEmpty)
     }
 
+    // MARK: - Sounds-like aliases
+
+    @Test func aliasFixesAMishearingTheFuzzyRulesCannot() {
+        // "zeddo" → "ziedo" is two edits, and 5-letter entries only get one —
+        // exactly the case a registered mishearing exists for. Punctuation
+        // and surrounding text stay untouched.
+        let entry = DictionaryEntry(word: "Ziedo", soundsLike: ["Zeddo"])
+        let result = TranscriptCorrector.correct("call zeddo.", dictionary: [entry])
+        #expect(result.text == "call Ziedo.")
+        #expect(result.corrections == [.init(original: "zeddo", replacement: "Ziedo")])
+    }
+
+    @Test func aliasMatchesExactlyNeverFuzzily() {
+        // Mishearings are often real words; a near-miss of one must not drift
+        // into the name ("zedd" is one edit from the alias "zeddo").
+        let entry = DictionaryEntry(word: "Ziedo", soundsLike: ["Zeddo"])
+        let result = TranscriptCorrector.correct("zedd played", dictionary: [entry])
+        #expect(result.text == "zedd played")
+        #expect(result.corrections.isEmpty)
+    }
+
+    @Test func aliasBeatsAnotherEntrysFuzzyMatch() {
+        // "zeddo" is one edit from the entry "Zeedo" but an exact registered
+        // mishearing of "Ziedo" — the user's explicit mapping wins.
+        let result = TranscriptCorrector.correct(
+            "ping zeddo",
+            dictionary: ["Zeedo", DictionaryEntry(word: "Ziedo", soundsLike: ["zeddo"])])
+        #expect(result.text == "ping Ziedo")
+    }
+
+    @Test func aliasNeverRewritesAnotherEntrysExactSpelling() {
+        // Colliding data passed straight to the corrector (the store refuses
+        // to create it): a window spelling a real entry stays that entry.
+        let result = TranscriptCorrector.correct(
+            "ask zeddo",
+            dictionary: ["Zeddo", DictionaryEntry(word: "Ziedo", soundsLike: ["zeddo"])])
+        #expect(result.text == "ask Zeddo")
+    }
+
+    @Test func multiWordAndSplitAliasesMatch() {
+        let zwisp = DictionaryEntry(word: "zwisp", soundsLike: ["the whisp"])
+        #expect(TranscriptCorrector.correct("open the whisp now", dictionary: [zwisp]).text
+                == "open zwisp now")
+
+        // A one-word alias split across two transcript words gets the same
+        // join tolerance the canonical spelling has.
+        let ziedo = DictionaryEntry(word: "Ziedo", soundsLike: ["zeddo"])
+        #expect(TranscriptCorrector.correct("call zed do, please", dictionary: [ziedo]).text
+                == "call Ziedo, please")
+    }
+
+    @Test func shortAliasesMatchWithoutAnyLengthFloor() {
+        // Exact alias matches don't need the fuzzy stage's length guards.
+        let entry = DictionaryEntry(word: "Ziedo", soundsLike: ["zed"])
+        #expect(TranscriptCorrector.correct("ask zed", dictionary: [entry]).text == "ask Ziedo")
+    }
+
     // MARK: - Reporting
 
     @Test func correctionsListReportsOriginalAndReplacement() {

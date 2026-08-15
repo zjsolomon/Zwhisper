@@ -52,9 +52,14 @@ public enum TranscriptCorrector {
     /// Fixes personal-dictionary terms in `text`. Returns the input unchanged
     /// (with no corrections) when there is nothing to do — empty text or an
     /// empty dictionary.
+    ///
+    /// Each entry's registered mishearings (`soundsLike`) are matched
+    /// **exactly** (normalized) — never fuzzily: mishearings are often real
+    /// words, and fuzzy-matching them would let ordinary text drift into a
+    /// name. An alias hit rewrites to the entry's canonical spelling.
     public static func correct(
         _ text: String,
-        dictionary: [String],
+        dictionary: [DictionaryEntry],
         config: Configuration.PersonalDictionary = Configuration.PersonalDictionary()
     ) -> Result {
         guard !text.isEmpty, !dictionary.isEmpty else {
@@ -151,6 +156,27 @@ public enum TranscriptCorrector {
                     exact = Match(wordCount: 2, replacement: entry.surface)
                 }
             }
+
+            // Registered mishearings: exact normalized match only, rewriting
+            // to the entry's canonical spelling. The `entryForms` rail still
+            // applies — a window that spells some entry is never an alias hit,
+            // so canonical text always wins even over colliding input data.
+            for alias in entry.aliases where exact == nil {
+                if w + alias.wordCount <= words.count {
+                    let join = words[w..<w + alias.wordCount].map { $0.normalized }.joined()
+                    if join == alias.normalized, !entryForms.contains(join) {
+                        exact = Match(wordCount: alias.wordCount, replacement: entry.surface)
+                        continue
+                    }
+                }
+                // Same split-word tolerance the canonical form gets.
+                if alias.wordCount == 1, w + 2 <= words.count {
+                    let join = words[w].normalized + words[w + 1].normalized
+                    if join == alias.normalized, !entryForms.contains(join) {
+                        exact = Match(wordCount: 2, replacement: entry.surface)
+                    }
+                }
+            }
         }
 
         return exact ?? fuzzy
@@ -182,6 +208,12 @@ public enum TranscriptCorrector {
 
     private struct Entry {
         let surface: String     // the user's exact spelling
+        let normalized: String  // lowercased, letters/digits only
+        let wordCount: Int      // whitespace-separated word count
+        let aliases: [AliasForm]  // registered mishearings, exact-match only
+    }
+
+    private struct AliasForm {
         let normalized: String  // lowercased, letters/digits only
         let wordCount: Int      // whitespace-separated word count
     }
@@ -220,18 +252,28 @@ public enum TranscriptCorrector {
 
     /// Prepares the dictionary for matching: normalises each entry and records
     /// its word count, dropping entries that normalise to nothing (pure
-    /// punctuation), which could never be a meaningful match.
-    private static func makeEntries(from dictionary: [String]) -> [Entry] {
+    /// punctuation), which could never be a meaningful match. Each entry's
+    /// aliases get the same treatment.
+    private static func makeEntries(from dictionary: [DictionaryEntry]) -> [Entry] {
         dictionary.compactMap { raw in
-            let normalized = normalize(raw)
+            let normalized = normalize(raw.word)
             guard !normalized.isEmpty else { return nil }
-            let wordCount = raw
-                .split(whereSeparator: { $0.isWhitespace })
-                .map(normalize)
-                .filter { !$0.isEmpty }
-                .count
-            return Entry(surface: raw, normalized: normalized, wordCount: max(wordCount, 1))
+            let aliases: [AliasForm] = raw.soundsLike.compactMap { alias in
+                let form = normalize(alias)
+                guard !form.isEmpty else { return nil }
+                return AliasForm(normalized: form, wordCount: max(wordCountOf(alias), 1))
+            }
+            return Entry(surface: raw.word, normalized: normalized,
+                         wordCount: max(wordCountOf(raw.word), 1), aliases: aliases)
         }
+    }
+
+    /// Whitespace-separated words that normalise to something matchable.
+    private static func wordCountOf(_ text: String) -> Int {
+        text.split(whereSeparator: { $0.isWhitespace })
+            .map(normalize)
+            .filter { !$0.isEmpty }
+            .count
     }
 
     /// Rebuilds the transcript, swapping each replaced word run for its
@@ -254,8 +296,10 @@ public enum TranscriptCorrector {
 
     /// Lowercased, letters and digits only — mirrors
     /// `CleanupService.normalizedWords` so casing and attached punctuation never
-    /// hide a match.
-    private static func normalize<S: StringProtocol>(_ text: S) -> String {
+    /// hide a match. Internal because `DictionaryStore.addAlias` must use the
+    /// *same* normalization for its collision checks — the store's validation
+    /// is what keeps this corrector's exact alias matches safe.
+    static func normalize<S: StringProtocol>(_ text: S) -> String {
         text.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 

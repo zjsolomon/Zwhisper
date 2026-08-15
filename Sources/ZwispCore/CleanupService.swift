@@ -33,12 +33,13 @@ public final class CleanupService {
     }
 
     /// Supplies the personal dictionary rendered into the system prompt (see
-    /// `Configuration.Cleanup.systemPrompt(base:dictionary:)`). A closure, not
-    /// a snapshot, so every request sees the current words. NOTE: the app must
-    /// call `warmUp()` after the dictionary changes — a changed system prompt
-    /// invalidates the prefilled KV cache, and without a re-warm the next
-    /// dictation pays the prefill inside its timeout budget.
-    public var dictionaryProvider: () -> [String] = { [] }
+    /// `Configuration.Cleanup.systemPrompt(base:dictionary:)`), each word with
+    /// its registered mishearings. A closure, not a snapshot, so every request
+    /// sees the current words. NOTE: the app must call `warmUp()` after the
+    /// dictionary changes — a changed system prompt invalidates the prefilled
+    /// KV cache, and without a re-warm the next dictation pays the prefill
+    /// inside its timeout budget.
+    public var dictionaryProvider: () -> [DictionaryEntry] = { [] }
 
     private let config: Configuration.Cleanup
     private let engine: CleanupEngine

@@ -20,6 +20,7 @@ final class SettingsModel {
     private let styleRuleStore: StyleRuleStore
     private let cleanup: CleanupService
     private let overlayStore: OverlayStore
+    private let editLearningStore: EditLearningStore
     let config: Configuration
     private let actions: MainWindow.Actions
 
@@ -27,6 +28,8 @@ final class SettingsModel {
 
     private(set) var hotkeys: [Hotkey] = []
     private(set) var dictionaryEntries: [String] = []
+    /// Mishearings per dictionary word, keyed by the stored word form.
+    private(set) var dictionaryAliases: [String: [String]] = [:]
     private(set) var rules: [AppStyleRule] = []
     private(set) var defaultStyle: WritingStyle = .standard
     private(set) var cleanupEnabled: Bool = false
@@ -37,6 +40,7 @@ final class SettingsModel {
     private(set) var speechModelName: String = ""
     private(set) var launchAtLogin: Bool = false
     private(set) var overlayEnabled: Bool = false
+    private(set) var editLearningEnabled: Bool = false
 
     // MARK: - Async-loaded
 
@@ -45,13 +49,15 @@ final class SettingsModel {
 
     init(hotkeyStore: HotkeyStore, dictionaryStore: DictionaryStore,
          styleRuleStore: StyleRuleStore, cleanup: CleanupService,
-         overlayStore: OverlayStore, config: Configuration,
+         overlayStore: OverlayStore, editLearningStore: EditLearningStore,
+         config: Configuration,
          actions: MainWindow.Actions) {
         self.hotkeyStore = hotkeyStore
         self.dictionaryStore = dictionaryStore
         self.styleRuleStore = styleRuleStore
         self.cleanup = cleanup
         self.overlayStore = overlayStore
+        self.editLearningStore = editLearningStore
         self.config = config
         self.actions = actions
         snapshot()
@@ -69,6 +75,9 @@ final class SettingsModel {
     private func snapshot() {
         hotkeys = hotkeyStore.hotkeys
         dictionaryEntries = dictionaryStore.sortedEntries
+        dictionaryAliases = Dictionary(uniqueKeysWithValues: dictionaryEntries.map {
+            ($0, dictionaryStore.aliases(for: $0))
+        })
         rules = styleRuleStore.rules
         defaultStyle = styleRuleStore.defaultStyle
         cleanupEnabled = cleanup.enabled
@@ -76,6 +85,7 @@ final class SettingsModel {
         speechModelName = SpeechModelLayout.displayName(variant: config.whisperModel)
         launchAtLogin = (SMAppService.mainApp.status == .enabled)
         overlayEnabled = overlayStore.enabled
+        editLearningEnabled = editLearningStore.enabled
     }
 
     private func reloadCleanupStatus() {
@@ -141,10 +151,44 @@ final class SettingsModel {
         snapshot()
     }
 
+    /// Store-only toggle: the watcher consults the store at each dictation,
+    /// so flipping it needs no app-side action closure.
+    func setEditLearningEnabled(_ enabled: Bool) {
+        editLearningStore.enabled = enabled
+        snapshot()
+    }
+
+    /// Adds a mishearing to a word; same shape as `addDictionaryWord` — only
+    /// a stored change fires the app's re-warm (the alias lands in the cleanup
+    /// system prompt, so the KV cache must be re-prefilled).
+    @discardableResult
+    func addDictionaryAlias(_ alias: String, for word: String) -> DictionaryStore.AliasAddResult {
+        let result = dictionaryStore.addAlias(alias, for: word)
+        switch result {
+        case .added, .updated:
+            actions.dictionaryChanged()
+        case .duplicate, .conflict, .rejected:
+            break
+        }
+        snapshot()
+        return result
+    }
+
+    func removeDictionaryAlias(_ alias: String, for word: String) {
+        dictionaryStore.removeAlias(alias, for: word)
+        actions.dictionaryChanged()
+        snapshot()
+    }
+
     /// Copy for the `.rejected` inline error, mirroring the menu-bar alert.
     var dictionaryRejectionMessage: String {
         "Entries are limited to \(config.dictionary.maxEntryWords) words and "
             + "\(config.dictionary.maxEntryLength) characters."
+    }
+
+    /// Copy for the alias `.conflict` inline error.
+    var aliasConflictMessage: String {
+        "That already spells a dictionary word or another word's mishearing."
     }
 
     // MARK: - Writing styles

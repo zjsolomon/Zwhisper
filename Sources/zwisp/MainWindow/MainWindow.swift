@@ -52,6 +52,7 @@ final class MainWindow {
          dictionaryStore: DictionaryStore, styleRuleStore: StyleRuleStore,
          speechInstaller: SpeechModelInstaller, cleanupInstaller: CleanupModelInstaller,
          cleanup: CleanupService, overlayStore: OverlayStore,
+         editLearningStore: EditLearningStore,
          statsStore: StatsStore, waveFeed: WaveFeed,
          levelProvider: @escaping () -> Float,
          config: Configuration, actions: Actions) {
@@ -60,6 +61,7 @@ final class MainWindow {
             dictionaryStore: dictionaryStore, styleRuleStore: styleRuleStore,
             speechInstaller: speechInstaller, cleanupInstaller: cleanupInstaller,
             cleanup: cleanup, overlayStore: overlayStore,
+            editLearningStore: editLearningStore,
             statsStore: statsStore, waveFeed: waveFeed,
             levelProvider: levelProvider, config: config, actions: actions)
     }

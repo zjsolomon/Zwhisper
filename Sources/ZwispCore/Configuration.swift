@@ -17,6 +17,8 @@ public struct Configuration {
     /// pill's `overlay` config is deliberately untouched.
     public var homeWave: Overlay
     public var stats: Stats
+    public var corrections: Corrections
+    public var editLearning: EditLearning
 
     public init(
         whisperModel: String,
@@ -28,7 +30,9 @@ public struct Configuration {
         setup: Setup = Setup(),
         overlay: Overlay = Overlay(),
         homeWave: Overlay = Overlay(barCount: 21, rowCount: 7),
-        stats: Stats = Stats()
+        stats: Stats = Stats(),
+        corrections: Corrections = Corrections(),
+        editLearning: EditLearning = EditLearning()
     ) {
         self.whisperModel = whisperModel
         self.audio = audio
@@ -40,6 +44,8 @@ public struct Configuration {
         self.overlay = overlay
         self.homeWave = homeWave
         self.stats = stats
+        self.corrections = corrections
+        self.editLearning = editLearning
     }
 
     /// Microphone capture / WhisperKit input format.
@@ -311,18 +317,27 @@ public struct Configuration {
         /// common prefix of the KV cache, so switching style re-prefills only
         /// the short style suffix rather than the whole prompt. With `.standard`
         /// style and an empty dictionary the result is byte-identical to `base`.
-        public static func systemPrompt(base: String, dictionary: [String],
+        public static func systemPrompt(base: String, dictionary: [DictionaryEntry],
                                         style: WritingStyle = .standard) -> String {
             var result = base
             if !dictionary.isEmpty {
+                // A word with no registered mishearings renders as the bare
+                // word, so a dictionary without aliases produces the exact
+                // bytes it always did (KV-prefix stability).
+                let rendered = dictionary.map { entry -> String in
+                    guard !entry.soundsLike.isEmpty else { return entry.word }
+                    let heard = entry.soundsLike.map { "\"\($0)\"" }.joined(separator: ", ")
+                    return "\(entry.word) (often misheard as \(heard))"
+                }.joined(separator: ", ")
                 result += """
 
 
                 PERSONAL DICTIONARY — names and terms this speaker uses, with their \
-                exact spellings: \(dictionary.joined(separator: ", ")).
+                exact spellings: \(rendered).
                 When a transcript word or short phrase is clearly a mishearing or \
                 misspelling of one of these, replace it with the exact spelling \
-                above (including its capitalization). Never insert a dictionary \
+                above (including its capitalization). A listed mishearing always \
+                means its dictionary term. Never insert a dictionary \
                 term the speaker didn't say, and never change words that are not \
                 mishearings of a dictionary term.
                 """
@@ -577,6 +592,56 @@ public struct Configuration {
 
         public init(retainedDays: Int = 90) {
             self.retainedDays = retainedDays
+        }
+    }
+
+    /// Passive edit learning: after an injection, the focused field is watched
+    /// (Accessibility, local, bounded) for the user fixing a word in place;
+    /// a qualifying fix raises the countdown toast and then lands in the
+    /// dictionary unless cancelled.
+    public struct EditLearning {
+        /// How often the watched field's value is re-read.
+        public var pollInterval: TimeInterval
+        /// How long after an injection edits are watched for.
+        public var watchSeconds: TimeInterval
+        /// Characters of surrounding text used to re-anchor the injected span
+        /// inside the field as it changes.
+        public var contextChars: Int
+        /// Fields larger than this are never read again after the baseline —
+        /// diffing a whole novel every poll isn't worth a dictionary word.
+        public var maxFieldChars: Int
+        /// The toast's countdown; when it expires the word is added.
+        public var toastSeconds: TimeInterval
+        /// AX messaging timeout so a hung target app can't stall the poll.
+        public var axTimeoutSeconds: Double
+
+        public init(pollInterval: TimeInterval = 2.0,
+                    watchSeconds: TimeInterval = 60,
+                    contextChars: Int = 120,
+                    maxFieldChars: Int = 100_000,
+                    toastSeconds: TimeInterval = 5.0,
+                    axTimeoutSeconds: Double = 0.3) {
+            self.pollInterval = pollInterval
+            self.watchSeconds = watchSeconds
+            self.contextChars = contextChars
+            self.maxFieldChars = maxFieldChars
+            self.toastSeconds = toastSeconds
+            self.axTimeoutSeconds = axTimeoutSeconds
+        }
+    }
+
+    /// Correction capture (`CorrectionStore`): dictations the user explicitly
+    /// fixed via "Fix Last Dictation…". Unlike `Stats`, these records DO hold
+    /// transcript text — that's their purpose (a local eval corpus + the source
+    /// of mishearing suggestions) — but only for dictations the user chose to
+    /// correct, and the file never leaves the machine.
+    public struct Corrections {
+        /// Oldest records beyond this count are pruned on each save; keeps the
+        /// corpus (and the file) bounded no matter how diligent the user is.
+        public var maxStored: Int
+
+        public init(maxStored: Int = 500) {
+            self.maxStored = maxStored
         }
     }
 

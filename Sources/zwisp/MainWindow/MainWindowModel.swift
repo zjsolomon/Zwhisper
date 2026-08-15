@@ -31,6 +31,7 @@ final class MainWindowModel {
          dictionaryStore: DictionaryStore, styleRuleStore: StyleRuleStore,
          speechInstaller: SpeechModelInstaller, cleanupInstaller: CleanupModelInstaller,
          cleanup: CleanupService, overlayStore: OverlayStore,
+         editLearningStore: EditLearningStore,
          statsStore: StatsStore, waveFeed: WaveFeed,
          levelProvider: @escaping () -> Float,
          config: Configuration, actions: MainWindow.Actions) {
@@ -41,7 +42,8 @@ final class MainWindowModel {
         self.settings = SettingsModel(
             hotkeyStore: hotkeyStore, dictionaryStore: dictionaryStore,
             styleRuleStore: styleRuleStore, cleanup: cleanup,
-            overlayStore: overlayStore, config: config, actions: actions)
+            overlayStore: overlayStore, editLearningStore: editLearningStore,
+            config: config, actions: actions)
         self.home = HomeModel(statsStore: statsStore, hotkeyStore: hotkeyStore)
         self.waveFeed = waveFeed
         self.levelProvider = levelProvider

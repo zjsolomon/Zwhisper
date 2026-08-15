@@ -89,6 +89,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Local dictation stats for the Home dashboard — counts and durations
     /// only, never transcript text. Recorded post-inject in `finishJob`.
     private lazy var statsStore = StatsStore(config: config.stats)
+    /// The local correction corpus ("Fix Last Dictation…"). Unlike stats this
+    /// DOES store transcript text — but only the pairs the user explicitly
+    /// saves, and only on this machine.
+    private lazy var correctionStore = CorrectionStore(config: config.corrections)
+    /// The most recent successfully injected dictation, kept in memory only,
+    /// so the menu's "Fix Last Dictation…" has something to show. Nothing is
+    /// persisted unless the user actually saves a correction.
+    private var lastDictation: (raw: String, injected: String)?
+    /// Passive edit learning: on/off preference, the AX watcher that spots an
+    /// in-place fix of the text just typed, and the countdown toast that lets
+    /// the user cancel before anything is added.
+    private lazy var editLearningStore = EditLearningStore()
+    private lazy var learnToast = LearnToast(config: config.editLearning,
+                                             overlayConfig: config.overlay)
+    private lazy var injectionWatcher = InjectionWatcher(config: config.editLearning) {
+        [weak self] injected, edited in
+        self?.handleInPlaceEdit(injected: injected, edited: edited)
+    }
     /// Phase bridge to the Home equalizer, mutated beside the overlay's
     /// show/think/hide seams (but never gated on `overlayStore.enabled` —
     /// that preference governs only the floating pill).
@@ -105,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dictionaryStore: dictionaryStore, styleRuleStore: styleRuleStore,
         speechInstaller: speechInstaller, cleanupInstaller: cleanupModelInstaller,
         cleanup: cleanup, overlayStore: overlayStore,
+        editLearningStore: editLearningStore,
         statsStore: statsStore, waveFeed: waveFeed,
         levelProvider: { [weak self] in self?.recorder.currentLevel() ?? 0 },
         config: config,
@@ -149,10 +168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// on WhisperKit and results are typed in dictation order.
     private var pipelineTail: Task<Void, Never>?
     private var retryTimer: Timer?
-    // The menu's two stateful items, re-synced by `menuWillOpen` so a change
+    // The menu's stateful items, re-synced by `menuWillOpen` so a change
     // made from the window shows checked/unchecked correctly here.
     private var cleanupToggleItem: NSMenuItem!
     private var loginItem: NSMenuItem!
+    private var fixLastItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.write("=== launched; modelName=\(config.whisperModel) ===")
@@ -163,7 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // prefills the dictionary-bearing prompt). Edited from the Dictionary
         // menu — a macOS Service was tried and abandoned: registration looked
         // correct in pbs but the item never surfaced in Services menus.
-        cleanup.dictionaryProvider = { [weak self] in self?.dictionaryStore.entries ?? [] }
+        cleanup.dictionaryProvider = { [weak self] in self?.dictionaryStore.entriesWithAliases ?? [] }
         Log.write("dictionary: \(dictionaryStore.entries.count) entries")
 
         // No permission prompts at launch — the setup window owns them,
@@ -460,12 +480,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Deterministic dictionary pass, applied last so it covers every path
         // to the final text: batch, streamed, cleanup-off, and all the cleanup
         // fallbacks. Also enforces exact casing the LLM may normalize away.
-        let corrected = TranscriptCorrector.correct(text, dictionary: dictionaryStore.entries,
+        let corrected = TranscriptCorrector.correct(text, dictionary: dictionaryStore.entriesWithAliases,
                                                     config: config.dictionary)
         for correction in corrected.corrections {
             Log.write("dictionary corrected '\(correction.original)' → '\(correction.replacement)'")
         }
-        await finishJob(injecting: corrected.text, targetPID: targetPID,
+        await finishJob(injecting: corrected.text, raw: raw, targetPID: targetPID,
                         timings: DictationTimings(
                             transcribeSeconds: transcribeSeconds,
                             cleanupSeconds: cleanupSeconds,
@@ -494,7 +514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Waits for the user's hands to be still, checks focus hasn't moved, then
     /// types the result. Awaited by the pipeline so injections stay in order.
     @MainActor
-    private func finishJob(injecting text: String, targetPID: pid_t?,
+    private func finishJob(injecting text: String, raw: String, targetPID: pid_t?,
                            timings: DictationTimings) async {
         defer {
             jobsInFlight -= 1
@@ -529,6 +549,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // focus-moved drops return above. The word COUNT crosses the seam —
         // the text itself is never stored.
         statsStore.record(wordCount: StatsStore.wordCount(of: text), timings: timings)
+        // Only what actually typed is worth correcting; kept in memory for the
+        // menu's "Fix Last Dictation…", not persisted.
+        lastDictation = (raw: raw, injected: text)
+        // Passive learning: watch the field we just typed into for the user
+        // fixing a word in place. Focus is still on the target here.
+        if editLearningStore.enabled {
+            injectionWatcher.beginWatching(injected: text)
+        }
         mainWindow.refreshHomeIfVisible()
     }
 
@@ -640,12 +668,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The menu is deliberately small: the window owns management and one-time
     /// setup, so only mid-flow actions stay here — toggling cleanup for the
-    /// next dictation, and capturing a word you just saw misheard. The two
-    /// stateful items are refreshed by `menuWillOpen` (which replaced the old
-    /// three-submenu rebuild machinery).
+    /// next dictation, capturing a word you just saw misheard, and fixing the
+    /// dictation that just typed. The stateful items are refreshed by
+    /// `menuWillOpen` (which replaced the old three-submenu rebuild machinery).
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
+        // `menuWillOpen` owns enabled-state (Fix Last Dictation is dead until
+        // something typed); auto-enablement would force it back on.
+        menu.autoenablesItems = false
         menu.addItem(NSMenuItem(title: "zwisp", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
 
@@ -661,6 +692,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(cleanupToggleItem)
         menu.addItem(NSMenuItem(title: "Add Dictionary Word…",
                                 action: #selector(addDictionaryWordClicked), keyEquivalent: ""))
+        fixLastItem = NSMenuItem(title: "Fix Last Dictation…",
+                                 action: #selector(fixLastDictationClicked), keyEquivalent: "")
+        menu.addItem(fixLastItem)
 
         loginItem = NSMenuItem(title: "Launch at Login",
                                action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -704,6 +738,148 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 + "\(config.dictionary.maxEntryWords) words and "
                 + "\(config.dictionary.maxEntryLength) characters."
             oops.runModal()
+        }
+    }
+
+    /// Correction capture: shows the last injected dictation in an editable
+    /// alert; saving stores the (raw, injected, corrected) pair locally and
+    /// offers to register any mishearing the diff maps onto a dictionary word.
+    @objc private func fixLastDictationClicked() {
+        guard let last = lastDictation else { return }
+        NSApp.activate(ignoringOtherApps: true)  // accessory app: unfront alerts get lost
+
+        let alert = NSAlert()
+        alert.messageText = "Fix last dictation"
+        alert.informativeText = "Edit the text to what you actually said. zwisp keeps "
+            + "the pair on this Mac only and uses it to learn your words."
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 360, height: 90))
+        let editor = NSTextView(frame: scroll.bounds)
+        editor.string = last.injected
+        editor.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        editor.isRichText = false
+        editor.isAutomaticQuoteSubstitutionEnabled = false  // keep the text verbatim
+        editor.autoresizingMask = [.width]
+        scroll.documentView = editor
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        alert.accessoryView = scroll
+        alert.window.initialFirstResponder = editor
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let corrected = editor.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !corrected.isEmpty, corrected != last.injected else { return }
+
+        correctionStore.record(raw: last.raw, injected: last.injected, corrected: corrected)
+        Log.write("correction saved (\(correctionStore.records.count) stored)")
+        // Show the corrected text on a reopen instead of re-flagging the fix.
+        lastDictation = (raw: last.raw, injected: corrected)
+
+        offerAliasSuggestions(injected: last.injected, corrected: corrected)
+    }
+
+    /// One confirm per suggested mishearing (there's rarely more than one).
+    /// Only what `DictionaryStore.addAlias` will accept gets offered — the
+    /// suggester pre-filters conflicts.
+    private func offerAliasSuggestions(injected: String, corrected: String) {
+        let suggestions = CorrectionDiff.aliasSuggestions(
+            injected: injected, corrected: corrected,
+            dictionary: dictionaryStore.entriesWithAliases, config: config.dictionary)
+        var addedAny = false
+        for suggestion in suggestions {
+            let confirm = NSAlert()
+            confirm.messageText = "Add a mishearing?"
+            confirm.informativeText = "zwisp heard “\(suggestion.heard)” where you wrote "
+                + "“\(suggestion.word)”. Register it so this fixes itself next time?"
+            confirm.addButton(withTitle: "Add")
+            confirm.addButton(withTitle: "Not Now")
+            guard confirm.runModal() == .alertFirstButtonReturn else { continue }
+            switch dictionaryStore.addAlias(suggestion.heard, for: suggestion.word) {
+            case .added, .updated:
+                Log.write("dictionary: '\(suggestion.heard)' registered as mishearing of "
+                    + "'\(suggestion.word)' via correction")
+                addedAny = true
+            case .duplicate, .conflict, .rejected:
+                break  // pre-filtered; nothing sensible to show
+            }
+        }
+        if addedAny { rewarmCleanup() }
+    }
+
+    /// Whether the system spell checker considers `word` ordinary vocabulary,
+    /// which is what tells a content edit apart from a mishearing worth learning.
+    ///
+    /// Uses the language-pinned overload deliberately. The short
+    /// `checkSpelling(of:startingAt:)` form reports almost any brief lowercase
+    /// token as correctly spelled — "cba", "ba", "michelle" all came back
+    /// "known" — so `EditLearning.actions` discarded nearly every new term the
+    /// user fixed by hand and the learn toast never appeared. Pinning the
+    /// language restores real dictionary lookups. Pin it to the *user's*
+    /// language rather than "en": under plain "en", British spellings like
+    /// "colour" read as unknown and zwisp would offer to learn them.
+    private static func isOrdinaryWord(_ word: String) -> Bool {
+        var wordCount = 0
+        let misspelling = NSSpellChecker.shared.checkSpelling(
+            of: word, startingAt: 0, language: NSSpellChecker.shared.language(),
+            wrap: false, inSpellDocumentWithTag: 0, wordCount: &wordCount)
+        return misspelling.location == NSNotFound
+    }
+
+    /// Passive edit learning: the watcher saw the user fix the injected text
+    /// in place. Decide what that teaches (core logic, spell checker deciding
+    /// "ordinary word" vs "term"), then raise the countdown toast — the word
+    /// is added when it expires, unless the user hits Cancel.
+    private func handleInPlaceEdit(injected: String, edited: String) {
+        let actions = EditLearning.actions(
+            injected: injected, edited: edited,
+            dictionary: dictionaryStore.entriesWithAliases,
+            config: config.dictionary,
+            isKnownWord: { Self.isOrdinaryWord($0) })
+        // One toast per dictation: consent prompts don't queue.
+        guard let action = actions.first else {
+            // Name each refused change so a too-strict gate is diagnosable
+            // from the log (the transcripts are already in it).
+            let changes = CorrectionDiff.substitutions(
+                from: injected, to: edited, maxWords: config.dictionary.maxEntryWords)
+                .map { "'\($0.original)' → '\($0.replacement)'" }
+            Log.write("edit learning: edit detected but nothing to learn "
+                + "(ordinary words, casing-only, or already registered): "
+                + (changes.isEmpty ? "no word-level change" : changes.joined(separator: ", ")))
+            return
+        }
+        switch action {
+        case .addWord(let word, let heard):
+            Log.write("edit learning: spotted '\(heard)' fixed to new word '\(word)'")
+            learnToast.present(
+                title: "Adding to dictionary", detail: word,
+                onCommit: { [weak self] in
+                    guard let self else { return }
+                    switch self.dictionaryStore.add(word) {
+                    case .added, .updated:
+                        self.dictionaryStore.addAlias(heard, for: word)
+                        self.rewarmCleanup()
+                        Log.write("edit learning: added '\(word)' with mishearing '\(heard)'")
+                    case .duplicate, .rejected:
+                        break
+                    }
+                },
+                onCancel: { Log.write("edit learning: cancelled adding '\(word)'") })
+        case .addMishearing(let heard, let word):
+            Log.write("edit learning: spotted '\(heard)' fixed to existing word '\(word)'")
+            learnToast.present(
+                title: "Adding mishearing", detail: "\(heard) → \(word)",
+                onCommit: { [weak self] in
+                    guard let self else { return }
+                    switch self.dictionaryStore.addAlias(heard, for: word) {
+                    case .added, .updated:
+                        self.rewarmCleanup()
+                        Log.write("edit learning: '\(heard)' registered as mishearing of '\(word)'")
+                    case .duplicate, .conflict, .rejected:
+                        break
+                    }
+                },
+                onCancel: { Log.write("edit learning: cancelled mishearing '\(heard)'") })
         }
     }
 
@@ -826,6 +1002,9 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         cleanupToggleItem?.state = cleanup.enabled ? .on : .off
         loginItem?.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
+        // Auto-enablement would keep this clickable with nothing to fix; the
+        // menu disables it explicitly until a dictation has actually typed.
+        fixLastItem?.isEnabled = (lastDictation != nil)
     }
 }
 
