@@ -33,7 +33,10 @@ struct TranscriptCorrectorTests {
 
     @Test func fuzzyMatchFixesMisheardName() {
         // "Ziedo" is exactly fuzzyMinLength, so it is eligible under the
-        // defaults — but only one edit away, which "zeedo" is.
+        // defaults — but only one edit away, which "zeedo" is. The string is
+        // a spelling-distance fixture, not how the name sounds: the real
+        // mishearing is "zeddo", which is two edits and covered below by
+        // twoEditMishearingNeedsALoweredThreshold.
         let result = TranscriptCorrector.correct("call zeedo", dictionary: ["Ziedo"])
         #expect(result.text == "call Ziedo")
         #expect(result.corrections == [.init(original: "zeedo", replacement: "Ziedo")])

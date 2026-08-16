@@ -141,7 +141,7 @@ modifiers are distinct, so you can bind Right ⌘ without affecting Left ⌘.
 ### Personal dictionary
 
 Whisper spells names it has never seen however it pleases. When a dictation
-comes out with "zeedo" instead of "Ziedo":
+comes out with "zeddo" instead of "Ziedo":
 
 - **Add a word** — the window's **Dictionary** section, or the menu bar's quick
   **Add Dictionary Word…** right when you spot the mishearing. Type the spelling
@@ -151,12 +151,17 @@ comes out with "zeedo" instead of "Ziedo":
 Dictionary words steer dictations two ways: the AI cleanup model is told your
 exact spellings, and a deterministic corrector runs afterwards — even when
 cleanup is off — fixing casing ("whisperkit" → "WhisperKit"), split words
-("whisper kit" → "WhisperKit"), and close mishearings ("zeedo" → "Ziedo").
+("whisper kit" → "WhisperKit"), and near-miss spellings.
 
 That corrector is deliberately timid, because a wrong "correction" is worse than
 a missed one: short entries never fuzzy-match (at four letters, a single edit
 turns "data" into "Dana"), while longer ones — a full name, say — tolerate more,
-so "zeddo solomon" still lands on "Ziedo Solomon". Everything stays on your Mac.
+so "zeddo solomon" still lands on "Ziedo Solomon".
+
+When what Whisper hears is too far from the spelling for that — "zeddo" on its
+own is two edits from "Ziedo", and five-letter entries only get one — register
+the mishearing against the word in the **Dictionary** section's **Heard as…**
+field, and it is fixed every time. Everything stays on your Mac.
 
 ### Per-app writing styles
 

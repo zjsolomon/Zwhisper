@@ -3,7 +3,7 @@ import Foundation
 /// Deterministic post-pass that fixes personal-dictionary terms in a final
 /// transcript. It runs *after* the optional LLM cleanup pass (which may or may
 /// not have already fixed the term) as a last, predictable safety net: Whisper
-/// routinely mishears names and jargon the user cares about ("Ziedo" → "zeedo",
+/// routinely mishears names and jargon the user cares about ("Ziedo" → "zeddo",
 /// "WhisperKit" → "whisper kit"), and this restores the exact spelling the user
 /// registered.
 ///
@@ -20,7 +20,7 @@ import Foundation
 /// does — lowercased, letters and digits only — so casing and attached
 /// punctuation don't hide an otherwise perfect match. Replacement, by contrast,
 /// only ever touches the matched *word run*: leading/trailing punctuation and
-/// all surrounding whitespace are preserved verbatim, so `"ask zeedo."` becomes
+/// all surrounding whitespace are preserved verbatim, so `"ask zeddo."` becomes
 /// `"ask Ziedo."` and never `"ask Ziedo"`.
 ///
 /// Pure `ZwispCore` logic (Foundation only), so it is fully unit-tested.

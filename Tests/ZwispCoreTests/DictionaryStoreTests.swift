@@ -100,15 +100,15 @@ struct DictionaryStoreTests {
         let store = DictionaryStore(defaults: defaults)
         store.add("Ziedo")
         #expect(store.addAlias("Zeddo", for: "Ziedo") == .added)
-        #expect(store.addAlias("Zeedo", for: "Ziedo") == .added)
-        #expect(store.aliases(for: "Ziedo") == ["Zeddo", "Zeedo"])
+        #expect(store.addAlias("Zetto", for: "Ziedo") == .added)
+        #expect(store.aliases(for: "Ziedo") == ["Zeddo", "Zetto"])
         #expect(store.entriesWithAliases == [
             DictionaryEntry(word: "zwisp"),
-            DictionaryEntry(word: "Ziedo", soundsLike: ["Zeddo", "Zeedo"]),
+            DictionaryEntry(word: "Ziedo", soundsLike: ["Zeddo", "Zetto"]),
         ])
 
         let second = DictionaryStore(defaults: defaults)
-        #expect(second.aliases(for: "Ziedo") == ["Zeddo", "Zeedo"])
+        #expect(second.aliases(for: "Ziedo") == ["Zeddo", "Zetto"])
     }
 
     @Test func aliasValidationMirrorsAdd() {

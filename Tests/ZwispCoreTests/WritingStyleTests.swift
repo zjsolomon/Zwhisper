@@ -92,8 +92,8 @@ struct WritingStyleTests {
         let base = Configuration.Cleanup.defaultSystemPrompt
         let rendered = Configuration.Cleanup.systemPrompt(
             base: base,
-            dictionary: ["zwisp", DictionaryEntry(word: "Ziedo", soundsLike: ["Zeddo", "Zeedo"])])
-        #expect(rendered.contains("zwisp, Ziedo (often misheard as \"Zeddo\", \"Zeedo\")"))
+            dictionary: ["zwisp", DictionaryEntry(word: "Ziedo", soundsLike: ["Zeddo", "Zetto"])])
+        #expect(rendered.contains("zwisp, Ziedo (often misheard as \"Zeddo\", \"Zetto\")"))
     }
 
     @Test func aliasFreeDictionaryRendersBareWords() {
